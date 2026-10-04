@@ -11,6 +11,7 @@ from flask import Flask, jsonify
 from flask_cors import CORS
 
 from realtime import socketio
+from routes.auth_routes import auth_bp
 from routes.transactions_routes import transactions_bp
 from routes.products_routes import products_bp
 from routes.chat_routes import chat_bp
@@ -20,10 +21,35 @@ from routes.clustering_routes import clustering_bp
 from routes.pricing_routes import pricing_bp
 from routes.tutorials_routes import tutorials_bp
 from routes.visibility_routes import visibility_bp
+from routes.data_routes import data_bp
+from db import DB_DRIVER
+from routes.insights_routes import insights_bp
+
+
+def _get_allowed_origins() -> list[str]:
+    raw = os.environ.get("CORS_ALLOWED_ORIGINS", "")
+    if not raw:
+        return [
+            "http://localhost:8080",
+            "http://localhost:5173",
+            "http://127.0.0.1:8080",
+            "http://127.0.0.1:5173",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ]
+    origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    return origins if origins else ["*"]
+
 
 app = Flask(__name__)
 app.url_map.strict_slashes = False
-CORS(app, origins="*")
+CORS(
+    app,
+    resources={r"/api/*": {"origins": _get_allowed_origins(), "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]}},
+    allow_headers=["Content-Type", "Authorization"],
+    supports_credentials=True,
+    expose_headers=["Content-Type", "Authorization"],
+)
 
 # ── Real-time layer ──────────────────────────────────────────────────────────
 # Binds the shared Flask-SocketIO instance (defined in realtime.py) to this app.
@@ -31,6 +57,7 @@ CORS(app, origins="*")
 socketio.init_app(app)
 
 # ── Register Blueprints ──────────────────────────────────────────────────────
+app.register_blueprint(auth_bp, url_prefix="/api/auth")
 app.register_blueprint(transactions_bp, url_prefix="/api/transactions")
 app.register_blueprint(products_bp, url_prefix="/api/products")
 app.register_blueprint(chat_bp, url_prefix="/api/chat")
@@ -40,36 +67,144 @@ app.register_blueprint(clustering_bp, url_prefix="/api/clustering")
 app.register_blueprint(pricing_bp, url_prefix="/api/pricing")
 app.register_blueprint(tutorials_bp, url_prefix="/api/tutorials")
 app.register_blueprint(visibility_bp, url_prefix="/api/visibility")
+app.register_blueprint(data_bp, url_prefix="/api/data")
+app.register_blueprint(insights_bp, url_prefix="/api/insights")
 
 
 @app.route("/api/health")
 def health():
     return jsonify({
         "status": "ok",
-        "database": "MySQL (Lumina)",
+        "database": "MySQL" if DB_DRIVER == "mysql" else "SQLite (development/test)",
         "models": {
-            "forecasting": "Facebook Prophet (fallback: Linear Regression)",
-            "anomaly": "Isolation Forest (fallback: Z-Score)",
-            "clustering": "K-Means (fallback: Rule-Based)",
-            "pricing": "XGBoost (fallback: Rule-Based)",
-            "chat": "Groq (llama-3.3-70b) — multilingual",
+            "forecasting": "Prophet or linear regression",
+            "anomaly": "Isolation Forest or z-score fallback",
+            "clustering": "K-Means or rule-based fallback",
+            "pricing": "Rule-based pricing model",
+            "chat": "Groq chat model",
         },
     })
 
 
 if __name__ == "__main__":
-    # Seed default tutorials and check schema on startup
+    # Demo data is created explicitly with `python backend/seed_data.py --demo`.
     def init_db_and_seed_tutorials():
         import json
         from db import query, execute
-        
+        from werkzeug.security import generate_password_hash
+
+        # 0. Ensure the users, login_otps, and revoked_tokens tables exist and seed demo accounts.
+        try:
+            execute(
+                "CREATE TABLE IF NOT EXISTS users ("
+                "id CHAR(36) NOT NULL DEFAULT (UUID()), "
+                "name VARCHAR(120) NOT NULL, "
+                "email VARCHAR(190) NOT NULL, "
+                "phone VARCHAR(30) NULL, "
+                "password_hash VARCHAR(255) NOT NULL, "
+                "role ENUM('owner','manager','analyst') NOT NULL, "
+                "company_id VARCHAR(64) NOT NULL DEFAULT 'default-company', "
+                "avatar_url MEDIUMTEXT NULL, "
+                "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+                "PRIMARY KEY (id), UNIQUE KEY uq_users_email (email)"
+                ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+            )
+            # Add phone column if database existed prior to phone auth
+            try:
+                execute("ALTER TABLE users ADD COLUMN phone VARCHAR(30) NULL")
+            except Exception:
+                pass
+            try:
+                execute("ALTER TABLE users ADD COLUMN avatar_url MEDIUMTEXT NULL")
+            except Exception:
+                pass
+            try:
+                execute("ALTER TABLE users ADD COLUMN company_id VARCHAR(64) NOT NULL DEFAULT 'default-company'")
+            except Exception:
+                pass
+
+            execute(
+                "CREATE TABLE IF NOT EXISTS login_otps ("
+                "id CHAR(36) NOT NULL, "
+                "identifier VARCHAR(190) NOT NULL, "
+                "user_id CHAR(36) NULL, "
+                "otp_hash VARCHAR(255) NOT NULL, "
+                "expires_at TIMESTAMP NOT NULL, "
+                "attempts INT NOT NULL DEFAULT 0, "
+                "used TINYINT(1) NOT NULL DEFAULT 0, "
+                "last_resend_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+                "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+                "PRIMARY KEY (id)"
+                ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+            )
+
+            execute(
+                "CREATE TABLE IF NOT EXISTS revoked_tokens ("
+                "token_hash VARCHAR(255) NOT NULL, "
+                "revoked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+                "PRIMARY KEY (token_hash)"
+                ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+            )
+
+            DEMO_OWNER_EMAIL = os.environ.get("DEMO_OWNER_EMAIL")
+            DEMO_OWNER_PHONE = os.environ.get("DEMO_OWNER_PHONE")
+            DEMO_OWNER_PASSWORD = os.environ.get("DEMO_OWNER_PASSWORD")
+            DEMO_MANAGER_EMAIL = os.environ.get("DEMO_MANAGER_EMAIL")
+            DEMO_MANAGER_PHONE = os.environ.get("DEMO_MANAGER_PHONE")
+            DEMO_MANAGER_PASSWORD = os.environ.get("DEMO_MANAGER_PASSWORD")
+            DEMO_ANALYST_EMAIL = os.environ.get("DEMO_ANALYST_EMAIL")
+            DEMO_ANALYST_PHONE = os.environ.get("DEMO_ANALYST_PHONE")
+            DEMO_ANALYST_PASSWORD = os.environ.get("DEMO_ANALYST_PASSWORD")
+
+            if not DEMO_OWNER_EMAIL or not DEMO_OWNER_PASSWORD or not DEMO_MANAGER_EMAIL or not DEMO_MANAGER_PASSWORD or not DEMO_ANALYST_EMAIL or not DEMO_ANALYST_PASSWORD:
+                raise RuntimeError("Demo account credentials must be configured in environment variables: DEMO_OWNER_EMAIL/DEMO_OWNER_PASSWORD, DEMO_MANAGER_EMAIL/DEMO_MANAGER_PASSWORD, DEMO_ANALYST_EMAIL/DEMO_ANALYST_PASSWORD.")
+
+            DEFAULT_USERS = [
+                ("Business Owner", DEMO_OWNER_EMAIL, DEMO_OWNER_PHONE or "+15550100001", DEMO_OWNER_PASSWORD, "owner"),
+                ("Shop Manager", DEMO_MANAGER_EMAIL, DEMO_MANAGER_PHONE or "+15550100002", DEMO_MANAGER_PASSWORD, "manager"),
+                ("Financial Analyst", DEMO_ANALYST_EMAIL, DEMO_ANALYST_PHONE or "+15550100003", DEMO_ANALYST_PASSWORD, "analyst"),
+            ]
+            import uuid
+            for name, email, phone, password, role in DEFAULT_USERS:
+                existing = query("SELECT id FROM users WHERE email = %s OR phone = %s", (email, phone))
+                if not existing:
+                    execute(
+                        "INSERT INTO users (id, name, email, phone, password_hash, role) "
+                        "VALUES (%s, %s, %s, %s, %s, %s)",
+                        (str(uuid.uuid4()), name, email, phone, generate_password_hash(password), role),
+                    )
+                else:
+                    # Update phone number for existing demo accounts if null
+                    execute("UPDATE users SET phone = %s WHERE email = %s AND (phone IS NULL OR phone = '')", (phone, email))
+            print(">>> Users table and OTP tables ready; default accounts seeded with phone credentials.")
+        except Exception as e:
+            print(f">>> Users seeding warning: {e}")
+
+        # Auto-seed realistic transactions & products if empty
+        try:
+            tx_count = query("SELECT COUNT(*) as cnt FROM transactions")
+            if not tx_count or tx_count[0].get("cnt", 0) == 0:
+                print(">>> Transactions table is empty. Seeding realistic sample dataset...")
+                import seed_data
+                seed_data.main()
+        except Exception as e:
+            print(f">>> Transactions auto-seed warning: {e}")
+
         # 1. Modify column width to text to ensure JSON translations fit
         try:
             execute("ALTER TABLE tutorials MODIFY title TEXT NOT NULL")
             execute("ALTER TABLE tutorials MODIFY description TEXT NULL")
             print(">>> Database schema checked: tutorials columns modified to TEXT.")
         except Exception as e:
-            print(f">>> Schema update warning: {e}")
+            pass  # Expected in SQLite or if columns already correct
+
+
+        # Add per-language video map for databases created before this feature.
+        try:
+            execute("ALTER TABLE tutorials ADD COLUMN video_ids JSON NULL")
+            print(">>> Database schema checked: tutorials.video_ids added.")
+        except Exception:
+            pass  # Column already exists.
 
         # 2. Seed default tutorials
         try:
@@ -347,19 +482,19 @@ if __name__ == "__main__":
         except Exception as e:
             print(f">>> Seeding tutorials error: {e}")
 
-    init_db_and_seed_tutorials()
-
+    host = os.environ.get("HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", 5000))
-    print(f"\n>>> Profit Navigator Backend running on http://localhost:{port}")
+    debug = os.environ.get("FLASK_DEBUG", "false").lower() in {"1", "true", "yes", "on"}
+    print(f"\n>>> Profit Navigator Backend running on http://{host}:{port}")
     print(f"   GET  /api/health          - check all models")
     print(f"   GET  /api/transactions     - list transactions")
     print(f"   POST /api/transactions     - create transaction")
     print(f"   GET  /api/products         - list products")
     print(f"   POST /api/products         - create product")
-    print(f"   POST /api/forecast         - Prophet time-series forecast")
+    print(f"   POST /api/forecast         - backend forecasts and rolling-origin metrics")
     print(f"   POST /api/anomaly          - Isolation Forest anomaly detection")
-    print(f"   POST /api/clustering       - K-Means product clustering")
-    print(f"   POST /api/pricing          - XGBoost price suggestions")
-    print(f"   POST /api/chat             - GPT-4o-mini AI chat")
+    print(f"   POST /api/clustering       - trend and catalog-relative sales segmentation")
+    print(f"   POST /api/pricing          - observed-demand price elasticity")
+    print(f"   POST /api/chat             - Groq business chat")
     print(f"   WS   /socket.io            - real-time data_changed events\n")
-    socketio.run(app, host="0.0.0.0", port=port, debug=True, allow_unsafe_werkzeug=True)
+    socketio.run(app, host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)

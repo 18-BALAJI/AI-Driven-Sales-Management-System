@@ -1,20 +1,23 @@
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { TrendingUp, TrendingDown, Minus, Star, DollarSign, HelpCircle, AlertTriangle } from "lucide-react";
+import { TrendingUp, TrendingDown, Minus, Star, DollarSign, HelpCircle, AlertTriangle, Sparkles, Loader2 } from "lucide-react";
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { useState, useEffect, useCallback } from "react";
-import { fetchProducts } from "@/lib/api";
+import { fetchProducts, runClustering } from "@/lib/api";
 import AddProductDialog from "@/components/AddProductDialog";
+import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
 const CLUSTER_COLORS: Record<string, string> = {
-  star: "hsl(172, 66%, 50%)",
-  "cash-cow": "hsl(142, 69%, 58%)",
-  "question-mark": "hsl(45, 90%, 60%)",
-  underperformer: "hsl(351, 89%, 70%)",
+  star: "#00b5ff",
+  "cash-cow": "#00d26a",
+  "question-mark": "#cf36e5",
+  underperformer: "#ff4d6d",
+  unclassified: "#64748b",
 };
+
 const CLUSTER_ICONS: Record<string, any> = { star: Star, "cash-cow": DollarSign, "question-mark": HelpCircle, underperformer: AlertTriangle };
-const CLUSTER_LABELS: Record<string, string> = { star: "Stars", "cash-cow": "Cash Cows", "question-mark": "Question Marks", underperformer: "Underperformers" };
+const CLUSTER_LABELS: Record<string, string> = { star: "Stars", "cash-cow": "Cash Cows", "question-mark": "Question Marks", underperformer: "Underperformers", unclassified: "Unclassified" };
 
 const CustomTooltip = ({ active, payload }: any) => {
   if (!active || !payload?.[0]) return null;
@@ -32,6 +35,8 @@ type Product = { id: string; name: string; category: string; price: number; unit
 export default function Products() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
+  const [clustering, setClustering] = useState(false);
+  const [segmentExplanations, setSegmentExplanations] = useState<Record<string, string>>({});
 
   const loadProducts = useCallback(async () => {
     setLoading(true);
@@ -43,6 +48,22 @@ export default function Products() {
     }
     setLoading(false);
   }, []);
+
+  const handleRunClustering = async () => {
+    setClustering(true);
+    try {
+      const res = await runClustering();
+      setSegmentExplanations(Object.fromEntries((res.clusters || []).map((item) => [item.id, item.explanation || "No segment explanation available."])));
+      toast.success(`Product segments recalculated (${res.model_used})`, {
+        description: `Updated segments for ${res.clusters?.length || 0} product(s).`
+      });
+      await loadProducts();
+    } catch (e: any) {
+      toast.error("Failed to run K-Means clustering");
+    } finally {
+      setClustering(false);
+    }
+  };
 
   useEffect(() => {
     loadProducts();
@@ -58,9 +79,15 @@ export default function Products() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h2 className="font-display text-2xl font-bold text-foreground">Product Performance</h2>
-          <p className="text-sm text-muted-foreground mt-1">Clustering analysis grouped by sales velocity and revenue</p>
+          <p className="text-sm text-muted-foreground mt-1">Segments use sales trend and unit sales relative to this catalog, not market-wide share.</p>
         </div>
-        <AddProductDialog onAdded={loadProducts} />
+        <div className="flex items-center gap-2 self-start">
+          <Button onClick={handleRunClustering} disabled={clustering || loading} variant="outline" className="gap-2">
+            {clustering ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4 text-primary" />}
+            {clustering ? "Recalculating..." : "Recalculate Segments"}
+          </Button>
+          <AddProductDialog onAdded={loadProducts} />
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-4">
@@ -126,7 +153,7 @@ export default function Products() {
                       <td className="p-4 text-center">
                         <span className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium" style={{ color: CLUSTER_COLORS[p.cluster], background: `${CLUSTER_COLORS[p.cluster]}15` }}>
                           <ClusterIcon className="h-3 w-3" />
-                          {CLUSTER_LABELS[p.cluster]}
+                          <span title={segmentExplanations[p.id] || "Recalculate segments to see the feature-level explanation."}>{CLUSTER_LABELS[p.cluster] || "Unclassified"}</span>
                         </span>
                       </td>
                     </tr>

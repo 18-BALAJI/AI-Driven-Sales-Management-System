@@ -1,36 +1,26 @@
-"""
-Clustering routes — fetches products from MySQL, runs K-Means via Python, updates clusters.
-"""
 import json
+import sys
 import os
-import subprocess
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 from db import query, execute
+from middleware.auth_middleware import require_auth
+from routes.auth_routes import DEFAULT_COMPANY_ID
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from python.clustering import run_kmeans_clustering
 
 clustering_bp = Blueprint("clustering", __name__)
 
 
-def run_python(script, payload):
-    python_path = os.environ.get("PYTHON_PATH", "python")
-    script_path = os.path.join(os.path.dirname(__file__), "..", "python", script)
-    proc = subprocess.run(
-        [python_path, script_path],
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"Python error: {proc.stderr}")
-    return json.loads(proc.stdout)
-
-
 @clustering_bp.route("/", methods=["POST"])
+@require_auth
 def run_clustering():
-    """POST /api/clustering — cluster products using K-Means."""
+    """POST /api/clustering — assign explainable catalog-relative segments."""
     try:
+        company_id = request.current_user.get("company_id") or DEFAULT_COMPANY_ID
         rows = query(
-            "SELECT id, name, price, units_sold, revenue, trend, cluster FROM products"
+            "SELECT id, name, price, units_sold, revenue, trend, cluster FROM products WHERE company_id = %s",
+            (company_id,),
         )
 
         if not rows:
@@ -49,16 +39,17 @@ def run_clustering():
                 "cluster": r["cluster"],
             })
 
-        result = run_python("clustering.py", {"products": products})
+        result = run_kmeans_clustering({"products": products})
 
         # Update cluster labels in MySQL
         for item in result.get("clusters", []):
             execute(
-                "UPDATE products SET cluster = %s WHERE id = %s",
-                (item["cluster"], item["id"]),
+                "UPDATE products SET cluster = %s WHERE company_id = %s AND id = %s",
+                (item["cluster"], company_id, item["id"]),
             )
 
         return jsonify(result)
+
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500

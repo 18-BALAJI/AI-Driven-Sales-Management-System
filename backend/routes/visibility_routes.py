@@ -6,6 +6,7 @@ row exists, so the table only stores explicit overrides.
 from flask import Blueprint, request, jsonify
 from db import query, execute
 from realtime import emit_change
+from middleware.auth_middleware import require_roles
 
 visibility_bp = Blueprint("visibility", __name__)
 
@@ -28,6 +29,7 @@ def get_visibility():
 
 
 @visibility_bp.route("/", methods=["PUT"])
+@require_roles("analyst", "owner")
 def set_visibility():
     """PUT /api/visibility — upsert a page/role visibility flag.
 

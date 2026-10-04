@@ -43,11 +43,21 @@ function getLocalizedText(text: string | null | undefined, lang: string = "en"):
   return text;
 }
 
+// Languages that can carry a dedicated translated video (English is the main field).
+const VIDEO_LANGUAGES: { code: string; label: string }[] = [
+  { code: "hi", label: "Hindi" },
+  { code: "ta", label: "Tamil" },
+  { code: "te", label: "Telugu" },
+  { code: "gu", label: "Gujarati" },
+  { code: "es", label: "Spanish" },
+];
+
 const emptyForm = {
   title: "",
   description: "",
   youtubeUrl: "",
   targetRole: "both" as TargetRole,
+  langUrls: {} as Record<string, string>,
 };
 
 export default function AnalystTutorials() {
@@ -89,6 +99,7 @@ export default function AnalystTutorials() {
       description: getLocalizedText(video.description) || "",
       youtubeUrl: video.youtubeId,
       targetRole: video.targetRole,
+      langUrls: { ...(video.videoIds ?? {}) },
     });
     setEditingId(video.id);
     setAdding(true);
@@ -108,6 +119,19 @@ export default function AnalystTutorials() {
       return;
     }
 
+    // Build the per-language video map from the optional language fields.
+    const videoIds: Record<string, string> = {};
+    for (const { code, label } of VIDEO_LANGUAGES) {
+      const raw = (form.langUrls[code] || "").trim();
+      if (!raw) continue;
+      const id = extractYoutubeId(raw);
+      if (!id) {
+        toast.error(`Invalid YouTube link for ${label}`);
+        return;
+      }
+      videoIds[code] = id;
+    }
+
     setSaving(true);
     try {
       if (editingId) {
@@ -116,6 +140,7 @@ export default function AnalystTutorials() {
           description: form.description.trim(),
           youtubeId,
           targetRole: form.targetRole,
+          videoIds,
         });
         toast.success("Tutorial updated");
       } else {
@@ -124,6 +149,7 @@ export default function AnalystTutorials() {
           description: form.description.trim(),
           youtubeId,
           targetRole: form.targetRole,
+          videoIds,
         });
         toast.success(
           `Tutorial added for ${form.targetRole === "both" ? "Owner & Manager" : form.targetRole}`
@@ -257,6 +283,33 @@ export default function AnalystTutorials() {
                   >
                     {opt.label}
                   </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                Translated versions (optional)
+              </label>
+              <p className="text-[11px] text-muted-foreground">
+                Paste a YouTube link/ID of this same video in another language. Viewers who
+                pick that language will watch this version instead of auto-translated subtitles.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                {VIDEO_LANGUAGES.map((l) => (
+                  <div key={l.code} className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground w-16 shrink-0">{l.label}</span>
+                    <Input
+                      placeholder="YouTube URL or ID"
+                      value={form.langUrls[l.code] || ""}
+                      onChange={e =>
+                        setForm(f => ({
+                          ...f,
+                          langUrls: { ...f.langUrls, [l.code]: e.target.value },
+                        }))
+                      }
+                    />
+                  </div>
                 ))}
               </div>
             </div>

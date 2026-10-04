@@ -2,9 +2,12 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useState, useEffect, useCallback } from "react";
 import {
   fetchPricing,
+  fetchProducts,
   generatePricing,
+  recordPriceObservation,
   approvePricing,
   rejectPricing,
+  type Product,
   type PricingRecommendation,
 } from "@/lib/api";
 import { useRole } from "@/contexts/RoleContext";
@@ -47,6 +50,26 @@ export default function Pricing() {
   const [generating, setGenerating] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [recs, setRecs] = useState<PricingRecommendation[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [recording, setRecording] = useState(false);
+  const [skipped, setSkipped] = useState<Array<{ productId: string; product: string; reason: string }>>([]);
+  const [observation, setObservation] = useState({
+    productId: "",
+    price: "",
+    unitsSold: "",
+    periodStart: "",
+    periodEnd: "",
+  });
+
+  const canGenerate = role === "owner" || role === "manager";
+
+  useEffect(() => {
+    if (!canGenerate) return;
+    fetchProducts().then((items) => {
+      setProducts(items);
+      setObservation((current) => ({ ...current, productId: current.productId || items[0]?.id || "" }));
+    }).catch(() => toast.error("Failed to load products for price observations"));
+  }, [canGenerate]);
 
   const load = useCallback(async () => {
     try {
@@ -72,17 +95,38 @@ export default function Pricing() {
   const handleGenerate = async () => {
     setGenerating(true);
     try {
-      const { suggestions, model_used } = await generatePricing();
+      const { suggestions, model_used, skipped: notEstimated } = await generatePricing();
+      setSkipped(notEstimated || []);
       toast.success(
         suggestions.length
           ? `${suggestions.length} suggestion(s) generated (${model_used})`
-          : "No pricing changes recommended right now"
+          : "No recommendation supported by the available price observations"
       );
       await load();
     } catch {
       toast.error("Failed to generate suggestions");
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const handleRecordObservation = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setRecording(true);
+    try {
+      await recordPriceObservation({
+        product_id: observation.productId,
+        price: Number(observation.price),
+        units_sold: Number(observation.unitsSold),
+        period_start: observation.periodStart,
+        period_end: observation.periodEnd,
+      });
+      setObservation((current) => ({ ...current, price: "", unitsSold: "", periodStart: "", periodEnd: "" }));
+      toast.success("Price observation recorded");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to record observation");
+    } finally {
+      setRecording(false);
     }
   };
 
@@ -119,17 +163,51 @@ export default function Pricing() {
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
         <div>
           <h2 className="font-display text-2xl font-bold text-foreground">Dynamic Pricing Engine</h2>
-          <p className="text-sm text-muted-foreground mt-1">
+            <p className="text-sm text-muted-foreground mt-1">
             {isAnalyst
-              ? "Review AI price suggestions — approving applies the new price to the product."
-              : "AI price suggestions require Financial Analyst approval before they take effect."}
+              ? "Review price tests based on observed price and unit sales."
+              : "Record comparable price periods; supported tests go to an analyst for approval."}
           </p>
         </div>
-        <Button onClick={handleGenerate} disabled={generating} className="gap-2 self-start">
-          {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-          {generating ? "Generating…" : "Generate Suggestions"}
-        </Button>
+        {canGenerate && (
+          <Button onClick={handleGenerate} disabled={generating} className="gap-2 self-start">
+            {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            {generating ? "Estimating…" : "Evaluate Price Tests"}
+          </Button>
+        )}
       </div>
+
+      {canGenerate && (
+        <form onSubmit={handleRecordObservation} className="glow-card p-5 space-y-4">
+          <div>
+            <h3 className="font-display text-base font-semibold text-foreground">Observed price and demand</h3>
+            <p className="text-xs text-muted-foreground mt-1">Enter units sold at one price over a comparable date range. Recommendations require multiple periods and price points.</p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+            <label className="text-xs font-medium text-muted-foreground">Product
+              <select required value={observation.productId} onChange={(event) => setObservation({ ...observation, productId: event.target.value })} className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground">
+                {products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
+              </select>
+            </label>
+            <label className="text-xs font-medium text-muted-foreground">Price
+              <input required min="0.01" step="0.01" type="number" value={observation.price} onChange={(event) => setObservation({ ...observation, price: event.target.value })} className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground" />
+            </label>
+            <label className="text-xs font-medium text-muted-foreground">Units sold
+              <input required min="0" step="1" type="number" value={observation.unitsSold} onChange={(event) => setObservation({ ...observation, unitsSold: event.target.value })} className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground" />
+            </label>
+            <label className="text-xs font-medium text-muted-foreground">Period start
+              <input required type="date" value={observation.periodStart} onChange={(event) => setObservation({ ...observation, periodStart: event.target.value })} className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground" />
+            </label>
+            <label className="text-xs font-medium text-muted-foreground">Period end
+              <input required type="date" min={observation.periodStart || undefined} value={observation.periodEnd} onChange={(event) => setObservation({ ...observation, periodEnd: event.target.value })} className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground" />
+            </label>
+          </div>
+          <Button type="submit" disabled={recording || !products.length} variant="outline" size="sm" className="gap-2">
+            {recording ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            Record observation
+          </Button>
+        </form>
+      )}
 
       {/* Role banner */}
       <div
@@ -144,7 +222,7 @@ export default function Pricing() {
         <p className="text-sm">
           {isAnalyst
             ? "You are reviewing pending recommendations. Approve to apply the suggested price, or reject to discard it."
-            : "Generated suggestions are sent to the Financial Analyst for approval. Prices change only once approved."}
+            : "Evidence-backed price tests are sent to the Financial Analyst for approval. Prices change only once approved."}
         </p>
       </div>
 
@@ -157,7 +235,7 @@ export default function Pricing() {
           <p className="text-muted-foreground italic">
             {isAnalyst
               ? "No pending recommendations to review. Generate suggestions to populate the queue."
-              : "No recommendations yet. Click “Generate Suggestions” to request AI pricing analysis."}
+              : "No supported recommendations yet. Record several comparable price/quantity periods before evaluation."}
           </p>
         </div>
       ) : (
@@ -210,28 +288,46 @@ export default function Pricing() {
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between text-sm">
+                  <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-100">
                     <div>
-                      <span className="text-muted-foreground">Confidence: </span>
+                      <span className="text-slate-500 font-medium">Fit R²: </span>
                       <span
                         className={cn(
-                          "font-medium",
-                          rec.confidence >= 80 ? "text-secondary" : rec.confidence >= 70 ? "text-primary" : "text-muted-foreground"
+                          "font-bold font-mono",
+                          (rec.modelFitR2 ?? 0) >= 0.8 ? "text-emerald-600" : (rec.modelFitR2 ?? 0) >= 0.5 ? "text-blue-600" : "text-amber-600"
                         )}
                       >
-                        {rec.confidence}%
+                        {rec.modelFitR2 != null ? rec.modelFitR2.toFixed(2) : "N/A"}
                       </span>
                     </div>
                     <div>
-                      <span className="text-muted-foreground">Impact: </span>
-                      <span className="text-foreground font-medium">{rec.expectedImpact}</span>
+                      <span className="text-slate-500 font-medium">Elasticity ($E_d$): </span>
+                      <span className="font-semibold text-slate-800 font-mono">
+                        {rec.priceElasticity !== undefined && rec.priceElasticity !== null ? `${rec.priceElasticity.toFixed(2)} (${rec.elasticityCategory})` : "Not estimated"}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 font-medium">Impact: </span>
+                      <span className="text-slate-900 font-bold">{rec.expectedImpact}</span>
                     </div>
                   </div>
-                  <div className="h-1.5 rounded-full bg-accent overflow-hidden">
+
+                  <p className="text-xs text-muted-foreground">
+                    Observations: {rec.sampleCount ?? "N/A"} · Log-log fit R²: {rec.modelFitR2 != null ? rec.modelFitR2.toFixed(2) : "N/A"}. Observational estimate; validate with a controlled test.
+                  </p>
+
+                  {rec.projectedRevenue && (
+                    <div className="rounded-xl bg-slate-50 border border-slate-200/80 p-2.5 flex items-center justify-between text-xs">
+                      <span className="text-slate-600 font-medium">Projected Monthly Revenue:</span>
+                      <span className="font-mono font-bold text-emerald-700">${rec.projectedRevenue.toLocaleString()} / mo</span>
+                    </div>
+                  )}
+
+                  <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
                     <motion.div
-                      className={cn("h-full rounded-full", rec.confidence >= 80 ? "bg-secondary" : "bg-primary")}
+                      className={cn("h-full rounded-full", (rec.modelFitR2 ?? 0) >= 0.8 ? "bg-emerald-500" : "bg-blue-500")}
                       initial={{ width: 0 }}
-                      animate={{ width: `${rec.confidence}%` }}
+                      animate={{ width: `${Math.max(0, Math.min(100, (rec.modelFitR2 ?? 0) * 100))}%` }}
                       transition={{ duration: 0.6, delay: i * 0.1 }}
                     />
                   </div>
@@ -263,6 +359,13 @@ export default function Pricing() {
               );
             })}
           </AnimatePresence>
+        </div>
+      )}
+
+      {skipped.length > 0 && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 space-y-2">
+          <h3 className="text-sm font-semibold text-foreground">Products without supported recommendations</h3>
+          {skipped.map((item) => <p key={item.productId} className="text-xs text-muted-foreground"><span className="font-medium text-foreground">{item.product}:</span> {item.reason}</p>)}
         </div>
       )}
     </div>

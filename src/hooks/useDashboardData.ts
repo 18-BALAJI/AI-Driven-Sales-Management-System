@@ -96,10 +96,10 @@ export function useDashboardData(daysHistory = 7) {
         netProfit,
         expenses,
         orders,
-        revenueChange: calcPct(thisRev, lastRev) || 12.4,
-        profitChange: calcPct(thisRev - thisExp, lastRev - lastExp) || 8.1,
-        expensesChange: calcPct(thisExp, lastExp) || 4.2,
-        ordersChange: calcPct(thisOrders, lastOrders) || 15.3
+        revenueChange: lastRev > 0 ? calcPct(thisRev, lastRev) : (thisRev > 0 ? 100 : 0),
+        profitChange: (lastRev - lastExp) !== 0 ? calcPct(thisRev - thisExp, lastRev - lastExp) : ((thisRev - thisExp) > 0 ? 100 : 0),
+        expensesChange: lastExp > 0 ? calcPct(thisExp, lastExp) : (thisExp > 0 ? 100 : 0),
+        ordersChange: lastOrders > 0 ? calcPct(thisOrders, lastOrders) : (thisOrders > 0 ? 100 : 0)
       });
 
       // Calculate monthly trend

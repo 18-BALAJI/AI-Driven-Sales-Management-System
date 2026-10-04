@@ -7,13 +7,16 @@ Seed realistic transaction history so the dashboard charts have data:
 Generates ~12 months of daily sales (income) with weekday/weekend and seasonal
 patterns plus recurring business expenses (rent, payroll, supplies, utilities).
 
-Run:  python backend/seed_data.py            (clears + reseeds transactions)
-      python backend/seed_data.py --keep     (append without clearing)
+Run:  python backend/seed_data.py --demo --company-id demo-company
+    Add --keep to preserve existing transactions and products for that company.
 """
+import argparse
 import os
 import sys
 import random
+import uuid
 from datetime import date, timedelta
+from werkzeug.security import generate_password_hash
 
 sys.path.insert(0, os.path.dirname(__file__))
 import db  # noqa: E402
@@ -99,30 +102,110 @@ def build_rows():
     return rows
 
 
-def main():
-    keep = "--keep" in sys.argv
+PRODUCTS_DATA = [
+    ("iPhone 15 Pro Max", "Electronics", 1100.00, 140, 154000.00, "up", "star"),
+    ("Samsung Galaxy S24", "Electronics", 950.00, 95, 90250.00, "up", "star"),
+    ("Casio G-Shock Watch", "Accessories", 120.00, 310, 37200.00, "up", "cash-cow"),
+    ("MacBook Pro M3", "Computers", 1999.00, 45, 89955.00, "up", "star"),
+    ("Sony WH-1000XM5 Headphones", "Audio", 349.00, 180, 62820.00, "up", "cash-cow"),
+    ("Logitech MX Master 3S", "Accessories", 99.00, 420, 41580.00, "up", "cash-cow"),
+    ("Dell UltraSharp 27 Monitor", "Electronics", 450.00, 65, 29250.00, "stable", "question-mark"),
+    ("Mechanical Gaming Keyboard", "Accessories", 85.00, 210, 17850.00, "down", "question-mark"),
+    ("USB-C Fast Charger 65W", "Accessories", 29.00, 650, 18850.00, "up", "cash-cow"),
+    ("Ergonomic Office Chair", "Furniture", 299.00, 28, 8372.00, "down", "underperformer"),
+    ("Wireless Earbuds Pro", "Audio", 149.00, 115, 17135.00, "stable", "question-mark"),
+    ("Desk Mat XL", "Accessories", 19.00, 340, 6460.00, "down", "underperformer"),
+]
+
+
+def seed_demo_users(company_id: str):
+    accounts = [
+        ("Business Owner", "DEMO_OWNER_EMAIL", "DEMO_OWNER_PASSWORD", "DEMO_OWNER_PHONE", "owner"),
+        ("Shop Manager", "DEMO_MANAGER_EMAIL", "DEMO_MANAGER_PASSWORD", "DEMO_MANAGER_PHONE", "manager"),
+        ("Financial Analyst", "DEMO_ANALYST_EMAIL", "DEMO_ANALYST_PASSWORD", "DEMO_ANALYST_PHONE", "analyst"),
+    ]
+    if not os.environ.get("DEMO_OWNER_EMAIL") or not os.environ.get("DEMO_OWNER_PASSWORD"):
+        raise RuntimeError("Set DEMO_OWNER_EMAIL and DEMO_OWNER_PASSWORD before running the demo seed command.")
+
+    for name, email_key, password_key, phone_key, role in accounts:
+        email = (os.environ.get(email_key) or "").strip().lower()
+        password = os.environ.get(password_key) or ""
+        phone = (os.environ.get(phone_key) or "").strip() or None
+        if not email and not password:
+            continue
+        if not email or not password:
+            raise RuntimeError(f"Both {email_key} and {password_key} are required when seeding the {role} account.")
+        existing = db.query("SELECT id, company_id FROM users WHERE email = %s", (email,))
+        if existing:
+            if existing[0]["company_id"] != company_id:
+                raise RuntimeError(f"Demo email {email} already belongs to another company; refusing to move it.")
+            continue
+        db.execute(
+            "INSERT INTO users (id, name, email, phone, password_hash, role, company_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (str(uuid.uuid4()), name, email, phone, generate_password_hash(password), role, company_id),
+        )
+    print("Seeded configured demo accounts (passwords were not displayed).")
+
+
+def seed_products(clear=True, company_id="demo-company"):
+    if clear:
+        db.execute("DELETE FROM products WHERE company_id = %s", (company_id,))
+        print("Cleared existing products for the selected company.")
+    
+    import uuid
+    p_rows = []
+    for name, cat, price, units, rev, trend, cluster in PRODUCTS_DATA:
+        p_rows.append((str(uuid.uuid4()), name, cat, price, units, rev, trend, cluster, company_id))
+        
+    db.execute_many(
+        "INSERT INTO products (id, name, category, price, units_sold, revenue, trend, cluster, company_id) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        p_rows
+    )
+    print(f"Inserted {len(p_rows)} realistic products.")
+
+
+def seed_demo_data(company_id: str, keep: bool = False):
+    random.seed(42)
     rows = build_rows()
+    seed_demo_users(company_id)
 
     if not keep:
-        db.execute("DELETE FROM transactions")
-        print("Cleared existing transactions.")
+        db.execute("DELETE FROM transactions WHERE company_id = %s", (company_id,))
+        print("Cleared existing transactions for the selected company.")
 
+    transaction_rows = [(str(uuid.uuid4()), *row, company_id) for row in rows]
     db.execute_many(
-        "INSERT INTO transactions (date, description, category, amount, type) "
-        "VALUES (%s, %s, %s, %s, %s)",
-        rows,
+        "INSERT INTO transactions (id, date, description, category, amount, type, company_id) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+        transaction_rows,
     )
+    seed_products(clear=not keep, company_id=company_id)
 
-    income = sum(r[3] for r in rows if r[4] == "income")
-    expense = sum(r[3] for r in rows if r[4] == "expense")
-    print(f"Inserted {len(rows)} transactions "
-          f"({sum(1 for r in rows if r[4]=='income')} income / "
-          f"{sum(1 for r in rows if r[4]=='expense')} expense)")
-    print(f"  Date range : {START} -> {TODAY}")
-    print(f"  Revenue    : ${income:,.2f}")
-    print(f"  Expenses   : ${expense:,.2f}")
-    print(f"  Net profit : ${income - expense:,.2f}")
+    income = sum(row[3] for row in rows if row[4] == "income")
+    expense = sum(row[3] for row in rows if row[4] == "expense")
+    print(f"Seeded {len(rows)} transactions and {len(PRODUCTS_DATA)} products for {company_id}.")
+    print(f"Date range: {START} through {TODAY}; net: ${income - expense:,.2f}")
+    return {"transactions": len(rows), "products": len(PRODUCTS_DATA), "company_id": company_id}
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Explicitly seed Profit Navigator demo data into the configured database.")
+    parser.add_argument("--demo", action="store_true", help="seed demo accounts, products, and transactions")
+    parser.add_argument("--company-id", default=os.environ.get("SEED_COMPANY_ID", "demo-company"))
+    parser.add_argument("--keep", action="store_true", help="append records rather than replace this company's transactions/products")
+    args = parser.parse_args()
+    if not args.demo:
+        parser.error("pass --demo to confirm writing demo data to the configured database")
+
+    company_id = args.company_id.strip()
+    if not company_id:
+        parser.error("--company-id must not be empty")
+
+    seed_demo_data(company_id, keep=args.keep)
 
 
 if __name__ == "__main__":
     main()
+

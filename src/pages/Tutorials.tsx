@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Play, BookOpen, TrendingUp, Users, DollarSign, BarChart3, Star, Globe } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fetchTutorials } from "@/lib/api";
+import { YouTubePlayer } from "@/components/YouTubePlayer";
 import { useRealtime } from "@/lib/socket";
 import { useRole } from "@/contexts/RoleContext";
 import { Link } from "react-router-dom";
@@ -16,6 +17,7 @@ type Tutorial = {
   description: string;
   youtubeId: string;
   targetRole: "owner" | "manager" | "both";
+  videoIds?: Record<string, string>;
   addedAt?: string;
 };
 
@@ -299,7 +301,13 @@ export default function Tutorials() {
                 {ui.close}
               </button>
             </div>
-            {lang !== "en" && (
+            {activeVideo.videoIds?.[lang] && lang !== "en" && (
+              <div className="flex items-center gap-2 px-4 py-2 bg-emerald-500/10 border-b border-emerald-500/20 text-xs text-emerald-400">
+                <Globe className="h-3.5 w-3.5 shrink-0" />
+                Playing the {languages.find((l) => l.code === lang)?.label} version of this video.
+              </div>
+            )}
+            {lang !== "en" && !activeVideo.videoIds?.[lang] && (
               <div className="flex items-center gap-2 px-4 py-2 bg-primary/10 border-b border-primary/20 text-xs text-primary">
                 <Globe className="h-3.5 w-3.5 shrink-0" />
                 {lang === "te" && "వీడియో తెలుగు సబ్‌టైటిల్స్‌తో ప్లే అవుతోంది. CC బటన్ నొక్కండి."}
@@ -310,11 +318,12 @@ export default function Tutorials() {
               </div>
             )}
             <div className="relative w-full" style={{ paddingBottom: "56.25%" }}>
-              <iframe className="absolute inset-0 w-full h-full"
-                src={`https://www.youtube.com/embed/${activeVideo.youtubeId}?autoplay=1&rel=0&hl=${lang}&cc_load_policy=1&cc_lang_pref=${lang}`}
-                title={getLocalizedText(activeVideo.title, lang)}
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                allowFullScreen />
+              <YouTubePlayer
+                key={`${activeVideo.id}-${activeVideo.videoIds?.[lang] ?? activeVideo.youtubeId}`}
+                videoId={activeVideo.videoIds?.[lang] ?? activeVideo.youtubeId}
+                lang={lang}
+                translate={!activeVideo.videoIds?.[lang]}
+              />
             </div>
           </motion.div>
         )}
@@ -389,6 +398,18 @@ export default function Tutorials() {
                       </p>
                     </div>
                   </div>
+                  {tutorial.videoIds && Object.keys(tutorial.videoIds).length > 0 && (
+                    <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                      <Globe className="h-3 w-3 shrink-0" />
+                      <span>
+                        Also in{" "}
+                        {languages
+                          .filter((l) => tutorial.videoIds?.[l.code])
+                          .map((l) => l.label)
+                          .join(", ")}
+                      </span>
+                    </div>
+                  )}
                   <div className="flex items-center justify-between">
                     <span className={cn("text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border",
                       categoryColors[catKey] || "bg-accent text-muted-foreground border-border")}>

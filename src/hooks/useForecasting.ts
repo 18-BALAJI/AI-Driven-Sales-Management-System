@@ -1,103 +1,70 @@
 import { useState, useEffect, useCallback } from "react";
-import { fetchTransactions } from "@/lib/api";
-import { performLinearRegression, predictFuture } from "@/lib/ml";
+import { fetchForecast } from "@/lib/api";
 
 export type ForecastResult = {
     period: string;
     predicted_revenue: number;
     predicted_expenses: number;
-    confidence: number;
+    predicted_profit?: number;
+        predicted_revenue_upper?: number | null;
+        predicted_revenue_lower?: number | null;
+    profit_margin?: number;
+    interval_coverage: number | null;
+};
+
+type ForecastMetrics = {
+    revenue?: { mae: number | null; rmse: number | null; mape: number | null; sample_count: number };
+    expenses?: { mae: number | null; rmse: number | null; mape: number | null; sample_count: number };
 };
 
 export type ChartPoint = {
     month: string;
     actual: number | null;
     forecast: number | null;
+    forecastUpper?: number | null;
+    forecastLower?: number | null;
+    forecastBand?: number | null;
+    expenses?: number | null;
 };
 
 export function useForecasting() {
     const [loading, setLoading] = useState(true);
     const [chartData, setChartData] = useState<ChartPoint[]>([]);
     const [forecasts, setForecasts] = useState<ForecastResult[]>([]);
+    const [modelUsed, setModelUsed] = useState<string>("pending");
+    const [metrics, setMetrics] = useState<ForecastMetrics | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     const calculateForecast = useCallback(async () => {
         setLoading(true);
         setError(null);
         try {
-            // Fetch transactions from API
-            const transactions = await fetchTransactions();
+            const res = await fetchForecast();
+            setForecasts(res.forecasts || []);
+            setModelUsed(res.model_used || "none");
+            setMetrics(res.metrics || null);
 
-            if (!transactions || transactions.length === 0) {
-                setLoading(false);
-                return;
-            }
-
-            // Group by month
-            const monthlyData: Record<string, { income: number; expense: number }> = {};
-            transactions.forEach(t => {
-                const date = new Date(t.date);
-                const monthKey = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
-
-                if (!monthlyData[monthKey]) {
-                    monthlyData[monthKey] = { income: 0, expense: 0 };
-                }
-
-                if (t.type === "income") monthlyData[monthKey].income += Number(t.amount);
-                else monthlyData[monthKey].expense += Number(t.amount);
-            });
-
-            const monthKeys = Object.keys(monthlyData).sort();
-            const revenues = monthKeys.map(k => monthlyData[k].income);
-            const expenses = monthKeys.map(k => monthlyData[k].expense);
-
-            // Perform Linear Regression
-            const revReg = performLinearRegression(revenues);
-            const expReg = performLinearRegression(expenses);
-
-            const n = revenues.length;
-            const futureCount = 6;
-
-            const projectedRevenues = predictFuture(revReg.slope, revReg.intercept, n, futureCount);
-            const projectedExpenses = predictFuture(expReg.slope, expReg.intercept, n, futureCount);
-
-            // Prepare Chart Data
-            const historicalPoints: ChartPoint[] = monthKeys.map((k, i) => {
-                const date = new Date(k + "-01");
-                return {
-                    month: date.toLocaleString('default', { month: 'short' }),
-                    actual: revenues[i],
-                    forecast: null
-                };
-            });
-
-            // Last historical point to connect lines
-            const lastHistoricalDate = new Date(monthKeys[n - 1] + "-01");
-
-            const forecastPoints: ChartPoint[] = [];
-            const newForecasts: ForecastResult[] = [];
-
-            for (let i = 0; i < futureCount; i++) {
-                const futureDate = new Date(lastHistoricalDate.getFullYear(), lastHistoricalDate.getMonth() + i + 1, 1);
-                const monthName = futureDate.toLocaleString('default', { month: 'short' });
-                const periodName = futureDate.toLocaleString('default', { month: 'short', year: '2-digit' });
-
-                forecastPoints.push({
-                    month: monthName,
-                    actual: null,
-                    forecast: projectedRevenues[i]
-                });
-
-                newForecasts.push({
-                    period: periodName,
-                    predicted_revenue: projectedRevenues[i],
-                    predicted_expenses: projectedExpenses[i],
-                    confidence: Math.max(0.5, 0.95 - i * 0.05) * revReg.r2
-                });
-            }
-
+            const historicalMonths = res.historical?.months || [];
+            const historicalRevenues = res.historical?.revenues || [];
+            const historicalExpenses = res.historical?.expenses || [];
+            const historicalPoints: ChartPoint[] = historicalMonths.map((month, index) => ({
+                month: new Date(`${month}-01`).toLocaleString("default", { month: "short" }),
+                actual: historicalRevenues[index] ?? 0,
+                forecast: null,
+                expenses: historicalExpenses[index] ?? 0,
+            }));
+            const forecastPoints: ChartPoint[] = (res.forecasts || []).map((forecast) => ({
+                month: forecast.period.split(" ")[0],
+                actual: null,
+                forecast: forecast.predicted_revenue,
+                    forecastUpper: forecast.predicted_revenue_upper ?? null,
+                    forecastLower: forecast.predicted_revenue_lower ?? null,
+                    forecastBand: forecast.predicted_revenue_upper != null && forecast.predicted_revenue_lower != null
+                        ? Math.max(0, forecast.predicted_revenue_upper - forecast.predicted_revenue_lower)
+                        : null,
+                expenses: forecast.predicted_expenses,
+            }));
             setChartData([...historicalPoints, ...forecastPoints]);
-            setForecasts(newForecasts);
 
         } catch (e: any) {
             console.error("Forecasting error:", e);
@@ -109,10 +76,11 @@ export function useForecasting() {
 
     useEffect(() => {
         calculateForecast();
-        // Poll every 30 seconds instead of Supabase realtime
         const interval = setInterval(calculateForecast, 30000);
         return () => clearInterval(interval);
     }, [calculateForecast]);
 
-    return { loading, chartData, forecasts, error, refresh: calculateForecast };
+    return { loading, chartData, forecasts, modelUsed, metrics, error, refresh: calculateForecast };
 }
+
+

@@ -14,7 +14,12 @@ dist-ssr
 
 # Environment files with secrets (keep .env.example tracked)
 .env
+.env.*
+!.env.example
 backend/.env
+backend/*.sqlite
+backend/*.sqlite3
+backend/*.db
 __pycache__/
 
 # Editor directories and files
@@ -31,3 +36,5 @@ __pycache__/
 # Temporary files and test results
 tmp/
 test-results/
+
+.claude/settings.local.json

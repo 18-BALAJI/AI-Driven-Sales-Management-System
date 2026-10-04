@@ -1,7 +1,6 @@
 numpy
 scikit-learn
 python-dateutil
-xgboost
 prophet
 pandas
 flask

@@ -78,14 +78,26 @@ def isolation_forest_detect(monthly_data: list):
             else:
                 severity = "low"
 
+            risk_score = min(99, int(abs(deviation) * 1.5))
+            if metric == "Expenses":
+                root_cause = "Unusual surge in vendor payments, supplies restock, or equipment purchase."
+                suggested_action = "Audit recent vendor invoices & check for unauthorized recurring subscriptions."
+            else:
+                root_cause = "Sudden fluctuation in daily transaction velocity or missed bulk orders."
+                suggested_action = "Investigate store foot traffic, marketing campaigns, and payment gateway logs."
+
             anomalies.append({
                 "id": f"anomaly-{i}",
                 "metric": metric,
                 "value": round(value),
                 "expected": round(expected),
+                "deviationPct": abs(round(deviation)),
+                "riskScore": risk_score,
+                "rootCause": root_cause,
+                "suggestedAction": suggested_action,
                 "description": (
-                    f"{metric} in {months[i]} deviated {abs(round(deviation))}% from the baseline. "
-                    f"Isolation Forest flagged this as an unusual pattern."
+                    f"{metric} in {months[i]} deviated {abs(round(deviation))}% from baseline. "
+                    f"Isolation Forest flagged an unusual outlier."
                 ),
                 "severity": severity,
                 "type": anom_type,
@@ -121,14 +133,26 @@ def zscore_detect(monthly_data: list):
                 anom_type = "spike" if z > 0 else "drop"
                 severity = "high" if abs(z) > 2.5 else "medium" if abs(z) > 2.0 else "low"
 
+                risk_score = min(99, int(abs(deviation) * 1.5))
+                if metric_name == "Expenses":
+                    root_cause = "Unusual surge in operational expense or supplier invoice."
+                    suggested_action = "Review detailed expense ledgers for vendor cost spikes."
+                else:
+                    root_cause = "Revenue deviation beyond historical normal range."
+                    suggested_action = "Check sales transaction volume and discount campaigns."
+
                 anomalies.append({
                     "id": f"anomaly-{metric_name}-{i}",
                     "metric": metric_name,
                     "value": round(float(val)),
                     "expected": round(float(mean)),
+                    "deviationPct": abs(round(deviation)),
+                    "riskScore": risk_score,
+                    "rootCause": root_cause,
+                    "suggestedAction": suggested_action,
                     "description": (
                         f"{metric_name} in {months[i]} was {abs(round(deviation))}% "
-                        f"{'above' if z > 0 else 'below'} the historical average."
+                        f"{'above' if z > 0 else 'below'} historical baseline."
                     ),
                     "severity": severity,
                     "type": anom_type,
@@ -138,11 +162,13 @@ def zscore_detect(monthly_data: list):
     return anomalies
 
 
-# ── Main ─────────────────────────────────────────────────────────────────────
-def main():
-    raw = sys.stdin.read()
-    payload = json.loads(raw)
-    monthly_data = payload["monthly_data"]
+# ── Main Exportable Function ──────────────────────────────────────────────────
+def run_anomaly_detection(payload: dict) -> dict:
+    """
+    Run Isolation Forest or Z-Score anomaly detection.
+    payload: { "monthly_data": [ {"month": "...", "income": ..., "expense": ...} ] }
+    """
+    monthly_data = payload.get("monthly_data", [])
 
     if SKLEARN_AVAILABLE and len(monthly_data) >= 4:
         anomalies = isolation_forest_detect(monthly_data)
@@ -151,8 +177,18 @@ def main():
         anomalies = zscore_detect(monthly_data)
         model_used = "zscore"
 
-    print(json.dumps({"anomalies": anomalies, "model_used": model_used}))
+    return {"anomalies": anomalies, "model_used": model_used}
+
+
+def main():
+    raw = sys.stdin.read()
+    if not raw.strip():
+        return
+    payload = json.loads(raw)
+    result = run_anomaly_detection(payload)
+    print(json.dumps(result))
 
 
 if __name__ == "__main__":
     main()
+

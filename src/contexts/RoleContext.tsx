@@ -1,44 +1,18 @@
 /**
- * Global role state — replaces the per-component useState in AppSidebar so
- * every page (Pricing approvals, Tutorials, page-visibility) reads the same
- * active role. Persisted to localStorage so a refresh keeps the role.
+ * Active role — now derived from the authenticated user (see AuthContext)
+ * rather than a manual selector. Kept as a thin hook so existing pages can
+ * continue to `import { useRole } from "@/contexts/RoleContext"`.
  */
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { useAuth } from "@/contexts/AuthContext";
 import type { UserRole } from "@/lib/navigation";
-
-const STORAGE_KEY = "active_role";
 
 type RoleContextValue = {
   role: UserRole;
-  setRole: (role: UserRole) => void;
 };
 
-const RoleContext = createContext<RoleContextValue | undefined>(undefined);
-
-export function RoleProvider({ children }: { children: ReactNode }) {
-  const [role, setRoleState] = useState<UserRole>(() => {
-    const stored = localStorage.getItem(STORAGE_KEY) as UserRole | null;
-    return stored ?? "owner";
-  });
-
-  const setRole = (next: UserRole) => {
-    setRoleState(next);
-    localStorage.setItem(STORAGE_KEY, next);
-  };
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, role);
-  }, [role]);
-
-  return (
-    <RoleContext.Provider value={{ role, setRole }}>
-      {children}
-    </RoleContext.Provider>
-  );
-}
-
 export function useRole(): RoleContextValue {
-  const ctx = useContext(RoleContext);
-  if (!ctx) throw new Error("useRole must be used within a RoleProvider");
-  return ctx;
+  const { user } = useAuth();
+  // Routes that consume the role are only reachable once authenticated, so a
+  // user is always present here; default to "owner" defensively.
+  return { role: (user?.role ?? "owner") as UserRole };
 }

@@ -1,9 +1,11 @@
-import { useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useCallback, useEffect, useState } from "react";
 import { NavLink } from "@/components/NavLink";
-import { ChevronDown, Zap } from "lucide-react";
-import { navItems, roleLabels, type UserRole } from "@/lib/navigation";
+import { LogOut, Zap } from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { navItems, roleLabels } from "@/lib/navigation";
 import { useRole } from "@/contexts/RoleContext";
+import { useAuth } from "@/contexts/AuthContext";
 import { fetchVisibility } from "@/lib/api";
 import { useRealtime } from "@/lib/socket";
 import {
@@ -18,18 +20,27 @@ import {
   SidebarFooter,
   useSidebar,
 } from "@/components/ui/sidebar";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 
 export function AppSidebar() {
   const { state } = useSidebar();
   const collapsed = state === "collapsed";
   const location = useLocation();
-  const { role, setRole } = useRole();
+  const navigate = useNavigate();
+  const { role } = useRole();
+  const { user, logout } = useAuth();
+
+  const handleLogout = async () => {
+    await logout();
+    navigate("/login", { replace: true });
+  };
+
+  const userInitials = (user?.name ?? "")
+    .split(" ")
+    .map((p) => p[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
 
   // Pages the Analyst has explicitly hidden for the current role.
   const [hiddenPages, setHiddenPages] = useState<Set<string>>(new Set());
@@ -67,7 +78,7 @@ export function AppSidebar() {
           <Zap className="h-6 w-6 text-primary shrink-0" />
           {!collapsed && (
             <span className="font-display text-lg font-bold text-foreground tracking-tight">
-              Lumina
+              Profit Navigator
             </span>
           )}
         </div>
@@ -82,12 +93,14 @@ export function AppSidebar() {
                     <NavLink
                       to={item.url}
                       end={item.url === "/"}
-                      className="hover:bg-accent/50"
-                      activeClassName="bg-accent text-primary font-medium"
+                      className="text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-all font-medium rounded-xl px-3 py-2.5"
+                      activeClassName="!bg-[#eff6ff] !text-[#2563eb] font-bold rounded-xl shadow-xs border-l-4 border-[#2563eb]"
                     >
-                      <item.icon className="mr-2 h-4 w-4 shrink-0" />
+                      <item.icon className="mr-2.5 h-4 w-4 shrink-0 text-[#2563eb]" />
                       {!collapsed && <span>{item.title}</span>}
                     </NavLink>
+
+
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
@@ -98,21 +111,54 @@ export function AppSidebar() {
 
       <SidebarFooter>
         {!collapsed && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button className="flex w-full items-center justify-between rounded-lg bg-accent/50 px-3 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
-                <span>{roleLabels[role]}</span>
-                <ChevronDown className="h-4 w-4" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-48">
-              {(Object.keys(roleLabels) as UserRole[]).map((r) => (
-                <DropdownMenuItem key={r} onClick={() => setRole(r)}>
-                  {roleLabels[r]}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <div className="rounded-lg bg-accent/50 px-3 py-2">
+            <Link
+              to="/profile"
+              className="flex items-center gap-2.5 rounded-md p-1 -m-1 hover:bg-accent transition-colors"
+              title="Edit profile"
+            >
+              <Avatar className="h-9 w-9 shrink-0">
+                {user?.avatarUrl && <AvatarImage src={user.avatarUrl} alt={user.name} />}
+                <AvatarFallback className="bg-primary/10 text-primary text-xs font-semibold">
+                  {userInitials || "?"}
+                </AvatarFallback>
+              </Avatar>
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-foreground truncate">
+                  {user?.name ?? "Account"}
+                </span>
+                <span className="block text-xs text-muted-foreground truncate">
+                  {roleLabels[role]}
+                </span>
+              </span>
+            </Link>
+            <button
+              onClick={handleLogout}
+              className="mt-2 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+            >
+              <LogOut className="h-4 w-4" />
+              Sign out
+            </button>
+          </div>
+        )}
+        {collapsed && (
+          <div className="flex flex-col items-center gap-2">
+            <Link to="/profile" title="Edit profile">
+              <Avatar className="h-8 w-8">
+                {user?.avatarUrl && <AvatarImage src={user.avatarUrl} alt={user.name} />}
+                <AvatarFallback className="bg-primary/10 text-primary text-xs font-semibold">
+                  {userInitials || "?"}
+                </AvatarFallback>
+              </Avatar>
+            </Link>
+            <button
+              onClick={handleLogout}
+              className="flex w-full items-center justify-center rounded-md py-1 text-muted-foreground hover:text-foreground transition-colors"
+              title="Sign out"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
         )}
       </SidebarFooter>
     </Sidebar>

@@ -2,12 +2,40 @@
 Tutorials routes — Financial Analyst adds YouTube tutorials targeted at
 the Owner and/or Manager roles. Replaces the old localStorage store.
 """
+import json
 import uuid
 from flask import Blueprint, request, jsonify
 from db import query, execute
 from realtime import emit_change
 
 tutorials_bp = Blueprint("tutorials", __name__)
+
+# Languages that may carry a dedicated translated video.
+VIDEO_LANGS = ("hi", "ta", "te", "gu", "es")
+
+
+def _parse_video_ids(raw):
+    """JSON columns may come back as str (or already-decoded) — normalise to dict."""
+    if not raw:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+def _clean_video_ids(value):
+    """Keep only known language codes mapped to non-empty string IDs."""
+    if not isinstance(value, dict):
+        return {}
+    return {
+        lang: vid.strip()
+        for lang, vid in value.items()
+        if lang in VIDEO_LANGS and isinstance(vid, str) and vid.strip()
+    }
 
 
 def _serialize(r):
@@ -17,6 +45,7 @@ def _serialize(r):
         "description": r["description"],
         "youtubeId": r["youtube_id"],
         "targetRole": r["target_role"],
+        "videoIds": _parse_video_ids(r.get("video_ids")),
         "addedAt": str(r["created_at"]),
     }
 
@@ -49,11 +78,20 @@ def create_tutorial():
     if target_role not in ("owner", "manager", "both"):
         target_role = "both"
 
+    video_ids = _clean_video_ids(body.get("videoIds"))
+
     tid = str(uuid.uuid4())
     execute(
-        "INSERT INTO tutorials (id, title, description, youtube_id, target_role) "
-        "VALUES (%s, %s, %s, %s, %s)",
-        (tid, title, body.get("description", ""), youtube_id, target_role),
+        "INSERT INTO tutorials (id, title, description, youtube_id, target_role, video_ids) "
+        "VALUES (%s, %s, %s, %s, %s, %s)",
+        (
+            tid,
+            title,
+            body.get("description", ""),
+            youtube_id,
+            target_role,
+            json.dumps(video_ids) if video_ids else None,
+        ),
     )
     emit_change("tutorials", "create", {"id": tid})
     return jsonify({"id": tid}), 201
@@ -78,6 +116,12 @@ def update_tutorial(tid):
                 value = "both"
             fields.append(f"{col} = %s")
             values.append(value)
+
+    # videoIds is a JSON column, handled separately from the simple text columns.
+    if "videoIds" in body:
+        cleaned = _clean_video_ids(body.get("videoIds"))
+        fields.append("video_ids = %s")
+        values.append(json.dumps(cleaned) if cleaned else None)
 
     if not fields:
         return jsonify({"error": "No fields to update"}), 400

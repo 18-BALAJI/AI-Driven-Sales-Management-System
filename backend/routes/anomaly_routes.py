@@ -1,37 +1,27 @@
-"""
-Anomaly detection routes — fetches transactions from MySQL, runs Isolation Forest via Python.
-"""
 import json
+import sys
 import os
-import subprocess
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 from db import query
+from middleware.auth_middleware import require_auth
+from routes.auth_routes import DEFAULT_COMPANY_ID
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from python.anomaly import run_anomaly_detection
 
 anomaly_bp = Blueprint("anomaly", __name__)
 
 
-def run_python(script, payload):
-    python_path = os.environ.get("PYTHON_PATH", "python")
-    script_path = os.path.join(os.path.dirname(__file__), "..", "python", script)
-    proc = subprocess.run(
-        [python_path, script_path],
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"Python error: {proc.stderr}")
-    return json.loads(proc.stdout)
-
-
 @anomaly_bp.route("/", methods=["POST"])
+@require_auth
 def detect_anomalies():
     """POST /api/anomaly — detect anomalies from transaction data."""
     try:
+        company_id = request.current_user.get("company_id") or DEFAULT_COMPANY_ID
         transactions = query(
             "SELECT id, date, description, category, amount, type "
-            "FROM transactions ORDER BY date ASC"
+            "FROM transactions WHERE company_id = %s ORDER BY date ASC",
+            (company_id,),
         )
 
         if not transactions:
@@ -53,7 +43,7 @@ def detect_anomalies():
             for m in sorted(monthly_map.keys())
         ]
 
-        result = run_python("anomaly.py", {"monthly_data": monthly_data})
+        result = run_anomaly_detection({"monthly_data": monthly_data})
         return jsonify(result)
 
     except Exception as e:
